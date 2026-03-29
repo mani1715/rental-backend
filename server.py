@@ -65,6 +65,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:8080",
+        "https://rental-frontend-production-1987.up.railway.app",
         "https://your-frontend-domain.vercel.app"
     ],
     allow_credentials=True,
