@@ -6,6 +6,7 @@ FastAPI Backend with MongoDB
 import os
 import uuid
 import bcrypt
+import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -127,22 +128,40 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
     Verify password using bcrypt directly
     """
-    # Validate input
-    if not plain_password or not isinstance(plain_password, str):
+    try:
+        # Validate input
+        if not plain_password or not isinstance(plain_password, str):
+            print(f"[VERIFY] ❌ Invalid password input: {type(plain_password)}")
+            return False
+        
+        if not hashed_password or not isinstance(hashed_password, str):
+            print(f"[VERIFY] ❌ Invalid hash input: {type(hashed_password)}")
+            return False
+        
+        # Clean the password
+        clean_password = plain_password.strip()
+        
+        # Truncate to 50 characters (must match hash_password)
+        safe_password = clean_password[:50]
+        
+        print(f"[VERIFY] Password length: {len(clean_password)} → {len(safe_password)}")
+        print(f"[VERIFY] Hash format: {hashed_password[:7] if len(hashed_password) >= 7 else hashed_password}")
+        
+        # Convert to bytes
+        password_bytes = safe_password.encode('utf-8')
+        hashed_bytes = hashed_password.encode('utf-8')
+        
+        # Verify
+        result = bcrypt.checkpw(password_bytes, hashed_bytes)
+        print(f"[VERIFY] Result: {result}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"[VERIFY] ❌ Error during verification: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
-    
-    # Clean the password
-    clean_password = plain_password.strip()
-    
-    # Truncate to 50 characters (must match hash_password)
-    safe_password = clean_password[:50]
-    
-    # Convert to bytes
-    password_bytes = safe_password.encode('utf-8')
-    hashed_bytes = hashed_password.encode('utf-8')
-    
-    # Verify
-    return bcrypt.checkpw(password_bytes, hashed_bytes)
 
 
 def create_token(user_id: str) -> str:
@@ -367,25 +386,102 @@ async def register(req: RegisterRequest):
 async def login(req: LoginRequest):
     """Login user"""
     try:
-        print(f"[LOGIN] Attempting login for: {req.email}")
+        print(f"[LOGIN] ═══════════════════════════════════════════")
+        print(f"[LOGIN] Email: {req.email}")
+        print(f"[LOGIN] Password length: {len(req.password)}")
         
         # Find user
         user = await db.users.find_one({"email": req.email})
+        
         if not user:
-            raise HTTPException(status_code=401, detail="Invalid email or password")
+            print(f"[LOGIN] ❌ User not found in database")
+            raise HTTPException(
+                status_code=401, 
+                detail="Invalid email or password"
+            )
+        
+        print(f"[LOGIN] ✅ User found: {user.get('email')}")
+        print(f"[LOGIN] User ID: {user.get('_id')}")
+        print(f"[LOGIN] User has password: {bool(user.get('password'))}")
+        print(f"[LOGIN] Stored password hash length: {len(user.get('password', ''))}")
         
         # Verify password
-        if not verify_password(req.password, user["password"]):
-            raise HTTPException(status_code=401, detail="Invalid email or password")
+        print(f"[LOGIN] Verifying password...")
+        password_match = verify_password(req.password, user["password"])
+        print(f"[LOGIN] Password match: {password_match}")
+        
+        if not password_match:
+            print(f"[LOGIN] ❌ Password verification failed")
+            # Let's also try to debug this
+            print(f"[LOGIN] Input password (first 3 chars): {req.password[:3]}...")
+            print(f"[LOGIN] Hash (first 20 chars): {user['password'][:20]}...")
+            raise HTTPException(
+                status_code=401, 
+                detail="Invalid email or password"
+            )
+        
+        print(f"[LOGIN] ✅ Password verified successfully")
         
         # Create token
         token = create_token(str(user["_id"]))
+        print(f"[LOGIN] Token created")
         
         # Return user data without password
         user_data = serialize_doc(user)
+
+
+@app.post("/api/auth/test-login")
+async def test_login_credentials(req: LoginRequest):
+    """
+    Test endpoint to debug login issues
+    Returns detailed info about why login might fail
+    """
+    try:
+        print(f"[TEST-LOGIN] Testing credentials for: {req.email}")
+        
+        # Find user
+        user = await db.users.find_one({"email": req.email})
+        
+        response = {
+            "email": req.email,
+            "userExists": user is not None,
+        }
+        
+        if not user:
+            response["issue"] = "User not found in database"
+            response["suggestion"] = "Check if user registered with this email"
+            return response
+        
+        # User exists - check password hash
+        response["userId"] = str(user["_id"])
+        response["hasPassword"] = bool(user.get("password"))
+        response["passwordHashLength"] = len(user.get("password", ""))
+        response["hashPrefix"] = user.get("password", "")[:7]
+        
+        # Try to verify password
+        try:
+            password_match = verify_password(req.password, user["password"])
+            response["passwordMatches"] = password_match
+            
+            if not password_match:
+                response["issue"] = "Password does not match stored hash"
+                response["suggestion"] = "User may have registered with a different password, or password hashing changed"
+        except Exception as e:
+            response["passwordMatches"] = False
+            response["verificationError"] = str(e)
+            response["issue"] = "Error during password verification"
+        
+        return response
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
         user_data.pop("password", None)
         
-        print(f"[LOGIN] Success for user: {user_data.get('id')}")
+        print(f"[LOGIN] ✅ Login successful for: {user_data.get('email')}")
         
         return {
             "success": True,
@@ -396,8 +492,13 @@ async def login(req: LoginRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[LOGIN ERROR] {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
+        print(f"[LOGIN] ❌ Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Login failed: {str(e)}"
+        )
 
 
 # ==================== USER ROUTES ====================
