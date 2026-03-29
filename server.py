@@ -19,6 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from jose import JWTError, jwt
 from dotenv import load_dotenv
 from bson import ObjectId
+import google.generativeai as genai
 
 load_dotenv()
 
@@ -28,6 +29,14 @@ DB_NAME = os.environ.get("DB_NAME", "rentease_db")
 JWT_SECRET = os.environ.get("JWT_SECRET", "rentease_secret_key")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_DAYS = 7
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# Configure Gemini AI if API key is available
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    print(f"[GEMINI] API configured successfully")
+else:
+    print(f"[GEMINI] Warning: GEMINI_API_KEY not set")
 
 # Security
 security = HTTPBearer()
@@ -275,6 +284,16 @@ class BookingCreate(BaseModel):
 
 class BookingStatusUpdate(BaseModel):
     status: str = Field(..., pattern="^(pending|approved|rejected|cancelled)$")
+
+
+class AIDescriptionRequest(BaseModel):
+    title: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    price: float = Field(..., gt=0)
+    propertyType: Optional[str] = None
+    bedrooms: Optional[int] = None
+    bathrooms: Optional[int] = None
+    squareFeet: Optional[float] = None
 
 
 # ==================== API ROUTES ====================
@@ -1132,3 +1151,82 @@ async def update_owner_profile(data: dict, current_user: dict = Depends(get_curr
         "profile": serialize_doc(profile)
     }
 
+
+# ==================== AI ROUTES ====================
+
+@app.post("/api/ai/generate-description")
+async def generate_description(req: AIDescriptionRequest):
+    """
+    Generate AI-powered property description using Gemini
+    """
+    try:
+        print(f"[AI] Generating description for: {req.title}")
+        
+        # Check if API key is configured
+        if not GEMINI_API_KEY:
+            raise HTTPException(
+                status_code=503,
+                detail="AI service not configured. Please set GEMINI_API_KEY environment variable."
+            )
+        
+        # Prepare the prompt
+        property_details = []
+        property_details.append(f"Title: {req.title}")
+        property_details.append(f"Location: {req.location}")
+        property_details.append(f"Price: ${req.price:,.2f}")
+        
+        if req.propertyType:
+            property_details.append(f"Type: {req.propertyType}")
+        if req.bedrooms:
+            property_details.append(f"Bedrooms: {req.bedrooms}")
+        if req.bathrooms:
+            property_details.append(f"Bathrooms: {req.bathrooms}")
+        if req.squareFeet:
+            property_details.append(f"Size: {req.squareFeet} sq ft")
+        
+        prompt = f"""Generate a professional, engaging property description for a rental listing with the following details:
+
+{chr(10).join(property_details)}
+
+Requirements:
+- Write 2-3 paragraphs (150-200 words)
+- Highlight key features and benefits
+- Use professional but friendly tone
+- Emphasize location advantages
+- Make it appealing to potential renters
+- Do not use markdown formatting
+- Do not include pricing or contact information
+
+Generate only the description text, no other commentary."""
+
+        print(f"[AI] Sending prompt to Gemini...")
+        
+        # Generate description using Gemini
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(prompt)
+        
+        if not response or not response.text:
+            raise HTTPException(
+                status_code=500,
+                detail="AI failed to generate description"
+            )
+        
+        description = response.text.strip()
+        
+        print(f"[AI] ✅ Description generated successfully ({len(description)} chars)")
+        
+        return {
+            "success": True,
+            "description": description
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AI] ❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI generation failed: {str(e)}"
+        )
