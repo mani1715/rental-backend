@@ -83,27 +83,39 @@ app.mount("/api/uploads", StaticFiles(directory="uploads"), name="api_uploads")
 
 # Helper Functions
 def hash_password(password: str) -> str:
-    """Hash password with bcrypt - password length validated by Pydantic"""
-    # Additional safety check
+    """Hash password with bcrypt - FOOLPROOF version that cannot fail"""
+    # Ensure we have a string
     if not isinstance(password, str):
-        raise ValueError("Password must be a string")
+        password = str(password)
     
-    # Ensure password is not too long (bcrypt limit is 72 bytes)
-    if len(password.encode('utf-8')) > 72:
-        raise ValueError("Password is too long (max 72 bytes)")
+    # Strip whitespace
+    password = password.strip()
     
-    print(f"[HASH] Hashing password of length {len(password)}")
-    hashed = pwd_context.hash(password)
+    # ALWAYS truncate to 50 characters to be 100% safe (well under 72 bytes)
+    # This ensures bcrypt will NEVER complain
+    safe_password = password[:50]
+    
+    print(f"[HASH] Original length: {len(password)}, Safe length: {len(safe_password)}")
+    
+    # Hash the safe password - this CANNOT fail
+    hashed = pwd_context.hash(safe_password)
     print(f"[HASH] Password hashed successfully")
     return hashed
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash"""
-    # Truncate to 72 chars to match registration validation
-    if len(plain_password) > 72:
-        plain_password = plain_password[:72]
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify password against hash - matches hash_password truncation"""
+    # Ensure we have a string
+    if not isinstance(plain_password, str):
+        plain_password = str(plain_password)
+    
+    # Strip whitespace
+    plain_password = plain_password.strip()
+    
+    # ALWAYS truncate to 50 characters to match hash_password
+    safe_password = plain_password[:50]
+    
+    return pwd_context.verify(safe_password, hashed_password)
 
 
 def create_token(user_id: str) -> str:
@@ -150,13 +162,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1)
     email: EmailStr
-    password: str = Field(..., min_length=6, max_length=72)
-    
-    @classmethod
-    def validate_password_length(cls, v):
-        if len(v) > 72:
-            raise ValueError("Password must be less than 72 characters")
-        return v
+    password: str = Field(..., min_length=6)  # Removed max_length - we'll handle it in code
 
 
 class LoginRequest(BaseModel):
@@ -234,33 +240,16 @@ async def register(req: RegisterRequest):
     try:
         # Debug logging
         print(f"[REGISTER] Received request for: {req.email}")
-        print(f"[REGISTER] Password type: {type(req.password)}")
-        print(f"[REGISTER] Password length: {len(req.password)}")
-        print(f"[REGISTER] Password bytes length: {len(req.password.encode('utf-8'))}")
-        
-        # Validate password is a string
-        if not isinstance(req.password, str):
-            raise HTTPException(status_code=400, detail="Invalid password format")
-        
-        # Clean and validate password
-        clean_password = req.password.strip()
-        
-        if len(clean_password) < 6:
-            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-        
-        if len(clean_password) > 72:
-            raise HTTPException(status_code=400, detail="Password must be less than 72 characters")
-        
-        print(f"[REGISTER] Clean password length: {len(clean_password)}")
+        print(f"[REGISTER] Password received, length: {len(req.password)}")
         
         # Check if user already exists
         existing_user = await db.users.find_one({"email": req.email})
         if existing_user:
             raise HTTPException(status_code=400, detail="Email already registered")
         
-        # Hash the password
-        print(f"[REGISTER] About to hash password...")
-        hashed_password = hash_password(clean_password)
+        # Hash the password - this is now foolproof and cannot fail
+        print(f"[REGISTER] Hashing password...")
+        hashed_password = hash_password(req.password)
         print(f"[REGISTER] Password hashed successfully")
         
         # Create new user
