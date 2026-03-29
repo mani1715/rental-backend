@@ -585,29 +585,104 @@ async def delete_listing(listing_id: str, current_user: dict = Depends(get_curre
 async def upload_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     """Upload a file (images for listings)"""
     try:
+        print(f"[UPLOAD] ═══════════════════════════════════════════")
+        print(f"[UPLOAD] User: {current_user.get('email')}")
+        print(f"[UPLOAD] Filename: {file.filename}")
+        print(f"[UPLOAD] Content Type: {file.content_type}")
+        
+        # Validate file type
+        allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type. Allowed: {', '.join(allowed_types)}"
+            )
+        
+        # Check file size (max 5MB)
+        content = await file.read()
+        file_size = len(content)
+        max_size = 5 * 1024 * 1024  # 5MB
+        
+        print(f"[UPLOAD] File size: {file_size / 1024:.2f} KB")
+        
+        if file_size > max_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Max size: {max_size / 1024 / 1024}MB"
+            )
+        
         # Generate unique filename
         file_ext = os.path.splitext(file.filename)[1]
         unique_filename = f"{uuid.uuid4()}{file_ext}"
         file_path = os.path.join("uploads", unique_filename)
         
+        print(f"[UPLOAD] Saving to: {file_path}")
+        
         # Save file
         with open(file_path, "wb") as f:
-            content = await file.read()
             f.write(content)
         
-        # Return file URL
+        # Verify file was saved
+        if not os.path.exists(file_path):
+            raise Exception("File was not saved properly")
+        
+        saved_size = os.path.getsize(file_path)
+        print(f"[UPLOAD] ✅ File saved successfully ({saved_size / 1024:.2f} KB)")
+        
+        # Return file URL (relative path that works with static serving)
         file_url = f"/uploads/{unique_filename}"
+        
+        print(f"[UPLOAD] URL: {file_url}")
         
         return {
             "success": True,
             "url": file_url,
-            "filename": unique_filename
+            "filename": unique_filename,
+            "size": file_size
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"[UPLOAD] ❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
 
 # ==================== WISHLIST ROUTES ====================
+
+
+
+@app.get("/api/test-image")
+async def test_image():
+    """Test endpoint to check image serving"""
+    try:
+        # List all files in uploads directory
+        upload_dir = "uploads"
+        if not os.path.exists(upload_dir):
+            return {
+                "success": False,
+                "message": "Uploads directory does not exist",
+                "directory": upload_dir
+            }
+        
+        files = os.listdir(upload_dir)
+        image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp'))]
+        
+        return {
+            "success": True,
+            "uploadsDirectory": upload_dir,
+            "directoryExists": True,
+            "totalFiles": len(files),
+            "imageFiles": len(image_files),
+            "sampleImages": image_files[:5] if image_files else [],
+            "sampleUrls": [f"/uploads/{f}" for f in image_files[:5]] if image_files else []
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 @app.get("/api/wishlist")
 async def get_wishlist(current_user: dict = Depends(get_current_user)):
