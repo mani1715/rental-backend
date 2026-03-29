@@ -1158,16 +1158,23 @@ async def update_owner_profile(data: dict, current_user: dict = Depends(get_curr
 async def generate_description(req: AIDescriptionRequest):
     """
     Generate AI-powered property description using Gemini
+    Returns fallback description if AI service is unavailable
     """
     try:
+        print(f"[AI] ═══════════════════════════════════════════")
         print(f"[AI] Generating description for: {req.title}")
+        print(f"[AI] API Key configured: {bool(GEMINI_API_KEY)}")
         
-        # Check if API key is configured
+        # If no API key, return a professionally crafted fallback
         if not GEMINI_API_KEY:
-            raise HTTPException(
-                status_code=503,
-                detail="AI service not configured. Please set GEMINI_API_KEY environment variable."
-            )
+            print(f"[AI] ⚠️  No API key - using fallback description")
+            fallback = generate_fallback_description(req)
+            return {
+                "success": True,
+                "description": fallback,
+                "aiGenerated": False,
+                "message": "Using template description (Gemini API key not configured)"
+            }
         
         # Prepare the prompt
         property_details = []
@@ -1199,34 +1206,93 @@ Requirements:
 
 Generate only the description text, no other commentary."""
 
-        print(f"[AI] Sending prompt to Gemini...")
+        print(f"[AI] Prompt prepared ({len(prompt)} chars)")
+        print(f"[AI] Calling Gemini API...")
         
-        # Generate description using Gemini
-        model = genai.GenerativeModel('gemini-pro')
-        response = model.generate_content(prompt)
-        
-        if not response or not response.text:
-            raise HTTPException(
-                status_code=500,
-                detail="AI failed to generate description"
+        try:
+            # Generate description using Gemini
+            model = genai.GenerativeModel('gemini-pro')
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    'temperature': 0.7,
+                    'top_p': 0.9,
+                    'top_k': 40,
+                    'max_output_tokens': 500,
+                }
             )
+            
+            if not response or not response.text:
+                raise Exception("Empty response from Gemini API")
+            
+            description = response.text.strip()
+            
+            print(f"[AI] ✅ AI description generated ({len(description)} chars)")
+            
+            return {
+                "success": True,
+                "description": description,
+                "aiGenerated": True
+            }
+            
+        except Exception as gemini_error:
+            print(f"[AI] ⚠️  Gemini API error: {str(gemini_error)}")
+            print(f"[AI] Falling back to template description")
+            
+            # Return fallback instead of failing
+            fallback = generate_fallback_description(req)
+            return {
+                "success": True,
+                "description": fallback,
+                "aiGenerated": False,
+                "message": f"Gemini API unavailable: {str(gemini_error)[:100]}"
+            }
         
-        description = response.text.strip()
-        
-        print(f"[AI] ✅ Description generated successfully ({len(description)} chars)")
-        
-        return {
-            "success": True,
-            "description": description
-        }
-        
-    except HTTPException:
-        raise
     except Exception as e:
-        print(f"[AI] ❌ Error: {str(e)}")
+        print(f"[AI] ❌ Unexpected error: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"AI generation failed: {str(e)}"
-        )
+        
+        # Still return fallback instead of error
+        try:
+            fallback = generate_fallback_description(req)
+            return {
+                "success": True,
+                "description": fallback,
+                "aiGenerated": False,
+                "message": f"Error occurred, using template: {str(e)[:100]}"
+            }
+        except:
+            # Last resort - return basic description
+            return {
+                "success": True,
+                "description": f"Welcome to this beautiful {req.propertyType or 'property'} located in {req.location}. This well-maintained property is available for ${req.price:,.2f} per month. Contact us today to schedule a viewing and make this your new home!",
+                "aiGenerated": False,
+                "message": "Using basic template"
+            }
+
+
+def generate_fallback_description(req: AIDescriptionRequest) -> str:
+    """
+    Generate a professional template-based description when AI is unavailable
+    """
+    property_type = req.propertyType or "property"
+    bedrooms_text = f"{req.bedrooms}-bedroom " if req.bedrooms else ""
+    bathrooms_text = f" with {req.bathrooms} bathroom{'s' if req.bathrooms != 1 else ''}" if req.bathrooms else ""
+    size_text = f" spanning {req.squareFeet:,.0f} square feet" if req.squareFeet else ""
+    
+    # First paragraph - property introduction
+    para1 = f"Welcome to this exceptional {bedrooms_text}{property_type.lower()} located in the desirable area of {req.location}{bathrooms_text}{size_text}. "
+    
+    if req.bedrooms and req.bedrooms >= 2:
+        para1 += "This spacious residence offers comfortable living spaces designed for modern lifestyles. "
+    else:
+        para1 += "This well-appointed residence provides everything you need for comfortable living. "
+    
+    # Second paragraph - location and amenities
+    para2 = f"Situated in {req.location}, residents enjoy convenient access to local amenities, shopping, dining, and entertainment options. The property features quality finishes throughout and is maintained to high standards. "
+    
+    # Third paragraph - call to action
+    para3 = f"Available for ${req.price:,.2f} per month, this {property_type.lower()} represents an excellent opportunity for those seeking quality accommodation in a prime location. Contact us today to schedule a viewing and discover all this property has to offer!"
+    
+    return para1 + para2 + para3
