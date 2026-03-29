@@ -69,8 +69,10 @@ app.add_middleware(
         "https://your-frontend-domain.vercel.app"
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
 
 # Create uploads directory and mount it for static file serving
@@ -193,6 +195,10 @@ class BookingStatusUpdate(BaseModel):
 # ==================== API ROUTES ====================
 
 # Health Check
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "RentEase API is running"}
+
 @app.get("/api")
 async def health_check():
     return {"status": "ok", "message": "RentEase API is running"}
@@ -203,65 +209,82 @@ async def health_check():
 @app.post("/api/auth/register")
 async def register(req: RegisterRequest):
     """Register a new user"""
-    print(f"[REGISTER] {req}")
-    # Check if user already exists
-    existing_user = await db.users.find_one({"email": req.email})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Create new user
-    user_doc = {
-        "_id": ObjectId(),
-        "name": req.name,
-        "email": req.email,
-        "password": hash_password(req.password),
-        "role": None,  # Role will be selected later
-        "createdAt": datetime.now(timezone.utc)
-    }
-    
-    await db.users.insert_one(user_doc)
-    
-    # Create token
-    token = create_token(str(user_doc["_id"]))
-    
-    # Return user data without password
-    user_data = serialize_doc(user_doc)
-    user_data.pop("password", None)
-    
-    return {
-        "success": True,
-        "token": token,
-        "user": user_data,
-        "requiresRoleSelection": True
-    }
+    try:
+        print(f"[REGISTER] Received request for: {req.email}")
+        
+        # Check if user already exists
+        existing_user = await db.users.find_one({"email": req.email})
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create new user
+        user_doc = {
+            "_id": ObjectId(),
+            "name": req.name,
+            "email": req.email,
+            "password": hash_password(req.password),
+            "role": None,  # Role will be selected later
+            "createdAt": datetime.now(timezone.utc)
+        }
+        
+        result = await db.users.insert_one(user_doc)
+        print(f"[REGISTER] User created with ID: {result.inserted_id}")
+        
+        # Create token
+        token = create_token(str(user_doc["_id"]))
+        
+        # Return user data without password
+        user_data = serialize_doc(user_doc)
+        user_data.pop("password", None)
+        
+        return {
+            "success": True,
+            "token": token,
+            "user": user_data,
+            "requiresRoleSelection": True
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[REGISTER ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 
 @app.post("/api/auth/login")
 async def login(req: LoginRequest):
     """Login user"""
-    print(f"[LOGIN] {req}")
-    # Find user
-    user = await db.users.find_one({"email": req.email})
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    # Verify password
-    if not verify_password(req.password, user["password"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    # Create token
-    token = create_token(str(user["_id"]))
-    
-    # Return user data without password
-    user_data = serialize_doc(user)
-    user_data.pop("password", None)
-    
-    return {
-        "success": True,
-        "token": token,
-        "user": user_data,
-        "requiresRoleSelection": user_data.get("role") is None
-    }
+    try:
+        print(f"[LOGIN] Attempting login for: {req.email}")
+        
+        # Find user
+        user = await db.users.find_one({"email": req.email})
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        # Verify password
+        if not verify_password(req.password, user["password"]):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        # Create token
+        token = create_token(str(user["_id"]))
+        
+        # Return user data without password
+        user_data = serialize_doc(user)
+        user_data.pop("password", None)
+        
+        print(f"[LOGIN] Success for user: {user_data.get('id')}")
+        
+        return {
+            "success": True,
+            "token": token,
+            "user": user_data,
+            "requiresRoleSelection": user_data.get("role") is None
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[LOGIN ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 
 # ==================== USER ROUTES ====================
