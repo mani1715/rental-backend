@@ -84,7 +84,18 @@ app.mount("/api/uploads", StaticFiles(directory="uploads"), name="api_uploads")
 # Helper Functions
 def hash_password(password: str) -> str:
     """Hash password with bcrypt - password length validated by Pydantic"""
-    return pwd_context.hash(password)
+    # Additional safety check
+    if not isinstance(password, str):
+        raise ValueError("Password must be a string")
+    
+    # Ensure password is not too long (bcrypt limit is 72 bytes)
+    if len(password.encode('utf-8')) > 72:
+        raise ValueError("Password is too long (max 72 bytes)")
+    
+    print(f"[HASH] Hashing password of length {len(password)}")
+    hashed = pwd_context.hash(password)
+    print(f"[HASH] Password hashed successfully")
+    return hashed
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -221,19 +232,43 @@ async def health_check():
 async def register(req: RegisterRequest):
     """Register a new user"""
     try:
+        # Debug logging
         print(f"[REGISTER] Received request for: {req.email}")
+        print(f"[REGISTER] Password type: {type(req.password)}")
+        print(f"[REGISTER] Password length: {len(req.password)}")
+        print(f"[REGISTER] Password bytes length: {len(req.password.encode('utf-8'))}")
+        
+        # Validate password is a string
+        if not isinstance(req.password, str):
+            raise HTTPException(status_code=400, detail="Invalid password format")
+        
+        # Clean and validate password
+        clean_password = req.password.strip()
+        
+        if len(clean_password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        
+        if len(clean_password) > 72:
+            raise HTTPException(status_code=400, detail="Password must be less than 72 characters")
+        
+        print(f"[REGISTER] Clean password length: {len(clean_password)}")
         
         # Check if user already exists
         existing_user = await db.users.find_one({"email": req.email})
         if existing_user:
             raise HTTPException(status_code=400, detail="Email already registered")
         
+        # Hash the password
+        print(f"[REGISTER] About to hash password...")
+        hashed_password = hash_password(clean_password)
+        print(f"[REGISTER] Password hashed successfully")
+        
         # Create new user
         user_doc = {
             "_id": ObjectId(),
             "name": req.name,
             "email": req.email,
-            "password": hash_password(req.password),
+            "password": hashed_password,
             "role": None,  # Role will be selected later
             "createdAt": datetime.now(timezone.utc)
         }
@@ -258,6 +293,8 @@ async def register(req: RegisterRequest):
         raise
     except Exception as e:
         print(f"[REGISTER ERROR] {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 
