@@ -29,12 +29,8 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "rentease_secret_key")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_DAYS = 7
 
-# Password hashing - configured to auto-truncate long passwords
-pwd_context = CryptContext(
-    schemes=["bcrypt"], 
-    deprecated="auto",
-    bcrypt__ident="2b"
-)
+# Password hashing - simple and safe configuration
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Security
 security = HTTPBearer()
@@ -87,21 +83,33 @@ app.mount("/api/uploads", StaticFiles(directory="uploads"), name="api_uploads")
 
 # Helper Functions
 def hash_password(password: str) -> str:
-    """Hash password with bcrypt - automatically handles length limits"""
-    # Encode to bytes and truncate to 72 bytes to avoid bcrypt errors
-    if len(password.encode('utf-8')) > 72:
-        password_bytes = password.encode('utf-8')[:72]
-        password = password_bytes.decode('utf-8', errors='ignore')
-    return pwd_context.hash(password)
+    """Hash password with bcrypt - safe for any password length"""
+    try:
+        # First, try to hash the password as-is
+        return pwd_context.hash(password)
+    except ValueError as e:
+        # If bcrypt complains about length, truncate and retry
+        if "72" in str(e) or "byte" in str(e).lower():
+            # Safely truncate to 50 characters (well under 72 bytes)
+            safe_password = password[:50]
+            return pwd_context.hash(safe_password)
+        else:
+            raise
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password - handles length limits same as hash_password"""
-    # Encode to bytes and truncate to 72 bytes to match hash behavior
-    if len(plain_password.encode('utf-8')) > 72:
-        password_bytes = plain_password.encode('utf-8')[:72]
-        plain_password = password_bytes.decode('utf-8', errors='ignore')
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify password - handles length limits safely"""
+    try:
+        # First, try to verify the password as-is
+        return pwd_context.verify(plain_password, hashed_password)
+    except ValueError as e:
+        # If bcrypt complains about length, truncate and retry
+        if "72" in str(e) or "byte" in str(e).lower():
+            # Safely truncate to 50 characters (well under 72 bytes)
+            safe_password = plain_password[:50]
+            return pwd_context.verify(safe_password, hashed_password)
+        else:
+            raise
 
 
 def create_token(user_id: str) -> str:
