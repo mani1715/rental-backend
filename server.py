@@ -428,6 +428,25 @@ async def login(req: LoginRequest):
         
         # Return user data without password
         user_data = serialize_doc(user)
+        user_data.pop("password", None)
+        
+        print(f"[LOGIN] ✅ Login successful for: {user_data.get('email')}")
+        
+        return {
+            "success": True,
+            "token": token,
+            "user": user_data,
+            "requiresRoleSelection": user_data.get("role") is None
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[LOGIN] ❌ Unexpected error: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Login failed: {str(e)}"
+        )
 
 
 @app.post("/api/auth/test-login")
