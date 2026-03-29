@@ -160,20 +160,59 @@ def serialize_doc(doc: dict) -> dict:
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials
+    """
+    Authentication middleware - extracts and validates JWT token
+    """
     try:
+        # Extract token from credentials
+        token = credentials.credentials
+        
+        print(f"[AUTH] Token received: {token[:20]}...")
+        
+        # Decode and verify JWT token
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user_id = payload.get("user_id")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
         
+        print(f"[AUTH] Decoded user_id: {user_id}")
+        
+        if not user_id:
+            print(f"[AUTH] ❌ No user_id in token payload")
+            raise HTTPException(
+                status_code=401, 
+                detail="Invalid token: missing user_id"
+            )
+        
+        # Find user in database
         user = await db.users.find_one({"_id": ObjectId(user_id)})
         if not user:
-            raise HTTPException(status_code=401, detail="User not found")
+            print(f"[AUTH] ❌ User not found in database: {user_id}")
+            raise HTTPException(
+                status_code=401, 
+                detail="User not found"
+            )
         
-        return serialize_doc(user)
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        # Serialize and return user data
+        user_data = serialize_doc(user)
+        print(f"[AUTH] ✅ User authenticated: {user_data.get('email')}")
+        
+        return user_data
+        
+    except JWTError as e:
+        print(f"[AUTH] ❌ JWT Error: {str(e)}")
+        raise HTTPException(
+            status_code=401, 
+            detail=f"Invalid or expired token: {str(e)}"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AUTH] ❌ Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=401, 
+            detail="Authentication failed"
+        )
 
 
 # Pydantic Models
