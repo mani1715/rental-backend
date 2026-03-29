@@ -706,53 +706,133 @@ async def delete_listing(listing_id: str, current_user: dict = Depends(get_curre
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    """Upload a file (images for listings)"""
+    """Upload a file (images for listings) with strict validation"""
     try:
         print(f"[UPLOAD] ═══════════════════════════════════════════")
         print(f"[UPLOAD] User: {current_user.get('email')}")
         print(f"[UPLOAD] Filename: {file.filename}")
         print(f"[UPLOAD] Content Type: {file.content_type}")
         
-        # Validate file type
-        allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"]
-        if file.content_type not in allowed_types:
+        # ===== STRICT VALIDATION =====
+        
+        # 1. Validate filename exists and is not empty
+        if not file.filename or file.filename.strip() == "":
+            print(f"[UPLOAD] ❌ No filename provided")
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid file type. Allowed: {', '.join(allowed_types)}"
+                detail="No file uploaded or invalid filename"
             )
         
-        # Check file size (max 5MB)
+        # 2. REJECT BLOB URLS - Critical validation
+        if "blob:" in file.filename or file.filename.startswith("blob:"):
+            print(f"[UPLOAD] ❌ Blob URL detected: {file.filename}")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file format. Blob URLs are not accepted. Please upload actual image files, not blob references."
+            )
+        
+        # 3. Reject data URLs
+        if file.filename.startswith("data:"):
+            print(f"[UPLOAD] ❌ Data URL detected")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file format. Data URLs are not accepted. Please upload actual files."
+            )
+        
+        # 4. Validate file type
+        allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"]
+        if file.content_type not in allowed_types:
+            print(f"[UPLOAD] ❌ Invalid content type: {file.content_type}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type '{file.content_type}'. Allowed: {', '.join(allowed_types)}"
+            )
+        
+        # 5. Read and validate file content
         content = await file.read()
         file_size = len(content)
-        max_size = 5 * 1024 * 1024  # 5MB
         
+        # 6. Validate file is not empty
+        if file_size == 0:
+            print(f"[UPLOAD] ❌ Empty file")
+            raise HTTPException(
+                status_code=400,
+                detail="File is empty. Please upload a valid image file."
+            )
+        
+        # 7. Check file size (max 5MB)
+        max_size = 5 * 1024 * 1024  # 5MB
         print(f"[UPLOAD] File size: {file_size / 1024:.2f} KB")
         
         if file_size > max_size:
+            print(f"[UPLOAD] ❌ File too large: {file_size / 1024 / 1024:.2f} MB")
             raise HTTPException(
                 status_code=400,
-                detail=f"File too large. Max size: {max_size / 1024 / 1024}MB"
+                detail=f"File too large ({file_size / 1024 / 1024:.1f}MB). Maximum size: 5MB"
             )
         
-        # Generate unique filename
+        # 8. Validate file has valid image magic bytes (file signature)
+        image_signatures = {
+            b'\xFF\xD8\xFF': 'JPEG',
+            b'\x89PNG\r\n\x1a\n': 'PNG',
+            b'GIF87a': 'GIF',
+            b'GIF89a': 'GIF',
+        }
+        
+        is_valid_image = False
+        detected_type = None
+        
+        for signature, img_type in image_signatures.items():
+            if content.startswith(signature):
+                is_valid_image = True
+                detected_type = img_type
+                print(f"[UPLOAD] ✅ Valid {img_type} image detected")
+                break
+        
+        # Check for WebP (has RIFF header)
+        if not is_valid_image and content.startswith(b'RIFF') and b'WEBP' in content[:20]:
+            is_valid_image = True
+            detected_type = 'WebP'
+            print(f"[UPLOAD] ✅ Valid WebP image detected")
+        
+        if not is_valid_image:
+            print(f"[UPLOAD] ❌ Invalid image file (bad magic bytes)")
+            print(f"[UPLOAD] First 20 bytes: {content[:20]}")
+            raise HTTPException(
+                status_code=400,
+                detail="File is not a valid image. Please upload a real image file (JPEG, PNG, GIF, or WebP), not a blob URL or invalid file."
+            )
+        
+        # ===== SAVE FILE =====
+        
+        # Generate unique filename with proper extension
         file_ext = os.path.splitext(file.filename)[1].lower()
+        if not file_ext or len(file_ext) > 5:
+            # If no extension or invalid extension, use detected type
+            ext_map = {'JPEG': '.jpg', 'PNG': '.png', 'GIF': '.gif', 'WebP': '.webp'}
+            file_ext = ext_map.get(detected_type, '.jpg')
+        
         unique_filename = f"{uuid.uuid4()}{file_ext}"
         file_path = os.path.join("uploads", unique_filename)
         
         print(f"[UPLOAD] Saving to: {file_path}")
+        print(f"[UPLOAD] Detected image type: {detected_type}")
         
         # Save file
         with open(file_path, "wb") as f:
             f.write(content)
         
-        # Verify file was saved
+        # Verify file was saved correctly
         if not os.path.exists(file_path):
             raise Exception("File was not saved properly")
         
         saved_size = os.path.getsize(file_path)
+        if saved_size != file_size:
+            raise Exception(f"File size mismatch. Expected {file_size}, got {saved_size}")
+        
         print(f"[UPLOAD] ✅ File saved successfully ({saved_size / 1024:.2f} KB)")
         
-        # Return file URL (relative path that works with static serving)
+        # Return file URL
         file_url = f"/uploads/{unique_filename}"
         
         # Also return full URL for frontend convenience
@@ -761,6 +841,7 @@ async def upload_file(file: UploadFile = File(...), current_user: dict = Depends
         
         print(f"[UPLOAD] Relative URL: {file_url}")
         print(f"[UPLOAD] Full URL: {full_url}")
+        print(f"[UPLOAD] ✅ Upload complete")
         
         return {
             "success": True,
