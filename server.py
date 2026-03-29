@@ -5,6 +5,7 @@ FastAPI Backend with MongoDB
 
 import os
 import uuid
+import bcrypt
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -15,7 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from motor.motor_asyncio import AsyncIOMotorClient
-from passlib.context import CryptContext
 from jose import JWTError, jwt
 from dotenv import load_dotenv
 from bson import ObjectId
@@ -28,9 +28,6 @@ DB_NAME = os.environ.get("DB_NAME", "rentease_db")
 JWT_SECRET = os.environ.get("JWT_SECRET", "rentease_secret_key")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_DAYS = 7
-
-# Password hashing - simple and safe configuration
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Security
 security = HTTPBearer()
@@ -83,39 +80,60 @@ app.mount("/api/uploads", StaticFiles(directory="uploads"), name="api_uploads")
 
 # Helper Functions
 def hash_password(password: str) -> str:
-    """Hash password with bcrypt - FOOLPROOF version that cannot fail"""
-    # Ensure we have a string
-    if not isinstance(password, str):
-        password = str(password)
+    """
+    Hash password using bcrypt directly - COMPLETELY FOOLPROOF
+    This bypasses passlib to avoid any configuration issues
+    """
+    # Validate input
+    if not password or not isinstance(password, str):
+        raise ValueError("Password must be a non-empty string")
     
-    # Strip whitespace
-    password = password.strip()
+    # Clean the password
+    clean_password = password.strip()
     
-    # ALWAYS truncate to 50 characters to be 100% safe (well under 72 bytes)
-    # This ensures bcrypt will NEVER complain
-    safe_password = password[:50]
+    # Debug logging
+    print(f"[HASH] Password received")
+    print(f"[HASH] Type: {type(clean_password)}")
+    print(f"[HASH] Length: {len(clean_password)}")
     
-    print(f"[HASH] Original length: {len(password)}, Safe length: {len(safe_password)}")
+    # Truncate to 50 characters to be safe (well under 72 byte limit)
+    safe_password = clean_password[:50]
+    print(f"[HASH] Safe password length: {len(safe_password)}")
     
-    # Hash the safe password - this CANNOT fail
-    hashed = pwd_context.hash(safe_password)
-    print(f"[HASH] Password hashed successfully")
-    return hashed
+    # Convert to bytes (required by bcrypt)
+    password_bytes = safe_password.encode('utf-8')
+    
+    # Generate salt and hash
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    
+    # Convert bytes back to string for storage
+    hashed_str = hashed.decode('utf-8')
+    
+    print(f"[HASH] ✅ Password hashed successfully")
+    return hashed_str
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash - matches hash_password truncation"""
-    # Ensure we have a string
-    if not isinstance(plain_password, str):
-        plain_password = str(plain_password)
+    """
+    Verify password using bcrypt directly
+    """
+    # Validate input
+    if not plain_password or not isinstance(plain_password, str):
+        return False
     
-    # Strip whitespace
-    plain_password = plain_password.strip()
+    # Clean the password
+    clean_password = plain_password.strip()
     
-    # ALWAYS truncate to 50 characters to match hash_password
-    safe_password = plain_password[:50]
+    # Truncate to 50 characters (must match hash_password)
+    safe_password = clean_password[:50]
     
-    return pwd_context.verify(safe_password, hashed_password)
+    # Convert to bytes
+    password_bytes = safe_password.encode('utf-8')
+    hashed_bytes = hashed_password.encode('utf-8')
+    
+    # Verify
+    return bcrypt.checkpw(password_bytes, hashed_bytes)
 
 
 def create_token(user_id: str) -> str:
