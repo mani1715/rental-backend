@@ -73,7 +73,10 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:8080",
         "https://rental-frontend-production-1987.up.railway.app",
-        "https://your-frontend-domain.vercel.app"
+        "https://rental-frontend-production.up.railway.app",
+        "https://your-frontend-domain.vercel.app",
+        frontend_url,
+        "*"  # Allow all origins for development - remove in production if needed
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
@@ -732,7 +735,7 @@ async def upload_file(file: UploadFile = File(...), current_user: dict = Depends
             )
         
         # Generate unique filename
-        file_ext = os.path.splitext(file.filename)[1]
+        file_ext = os.path.splitext(file.filename)[1].lower()
         unique_filename = f"{uuid.uuid4()}{file_ext}"
         file_path = os.path.join("uploads", unique_filename)
         
@@ -752,11 +755,19 @@ async def upload_file(file: UploadFile = File(...), current_user: dict = Depends
         # Return file URL (relative path that works with static serving)
         file_url = f"/uploads/{unique_filename}"
         
-        print(f"[UPLOAD] URL: {file_url}")
+        # Also return full URL for frontend convenience
+        backend_url = os.environ.get("BACKEND_URL", "https://rental-backend-production-3c03.up.railway.app")
+        full_url = f"{backend_url}/uploads/{unique_filename}"
+        
+        print(f"[UPLOAD] Relative URL: {file_url}")
+        print(f"[UPLOAD] Full URL: {full_url}")
         
         return {
             "success": True,
             "url": file_url,
+            "fullUrl": full_url,
+            "image": file_url,
+            "imageUrl": full_url,
             "filename": unique_filename,
             "size": file_size
         }
