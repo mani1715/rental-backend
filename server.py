@@ -83,33 +83,16 @@ app.mount("/api/uploads", StaticFiles(directory="uploads"), name="api_uploads")
 
 # Helper Functions
 def hash_password(password: str) -> str:
-    """Hash password with bcrypt - safe for any password length"""
-    try:
-        # First, try to hash the password as-is
-        return pwd_context.hash(password)
-    except ValueError as e:
-        # If bcrypt complains about length, truncate and retry
-        if "72" in str(e) or "byte" in str(e).lower():
-            # Safely truncate to 50 characters (well under 72 bytes)
-            safe_password = password[:50]
-            return pwd_context.hash(safe_password)
-        else:
-            raise
+    """Hash password with bcrypt - password length validated by Pydantic"""
+    return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password - handles length limits safely"""
-    try:
-        # First, try to verify the password as-is
-        return pwd_context.verify(plain_password, hashed_password)
-    except ValueError as e:
-        # If bcrypt complains about length, truncate and retry
-        if "72" in str(e) or "byte" in str(e).lower():
-            # Safely truncate to 50 characters (well under 72 bytes)
-            safe_password = plain_password[:50]
-            return pwd_context.verify(safe_password, hashed_password)
-        else:
-            raise
+    """Verify password against hash"""
+    # Truncate to 72 chars to match registration validation
+    if len(plain_password) > 72:
+        plain_password = plain_password[:72]
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_token(user_id: str) -> str:
@@ -156,7 +139,13 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1)
     email: EmailStr
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=6, max_length=72)
+    
+    @classmethod
+    def validate_password_length(cls, v):
+        if len(v) > 72:
+            raise ValueError("Password must be less than 72 characters")
+        return v
 
 
 class LoginRequest(BaseModel):
